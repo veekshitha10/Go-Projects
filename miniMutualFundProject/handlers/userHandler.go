@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 
 	"mutualfundminiproject/database"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/minio/minio-go/v7"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
@@ -18,7 +20,8 @@ import (
 type UserHandler struct {
 	database.IUserDB // prmoted field
 	rdb              *redis.Client
-	ctx              context.Context
+	ctx              *context.Context
+	s3Client         *minio.Client
 }
 
 type IUserHandler interface {
@@ -27,10 +30,11 @@ type IUserHandler interface {
 	CreateOrder(msg *kafka.Messaging) func(c *fiber.Ctx) error // GetaOrderBy(c *fiber.Ctx) error
 	//ConfirmOrder(c *fiber.Ctx) error
 	GetOrdersByUser(c *fiber.Ctx) error
+	UploadImage(c *fiber.Ctx) error
 }
 
-func NewUserHandler(iuserdb database.IUserDB, ctx context.Context, rdb *redis.Client) IUserHandler {
-	return &UserHandler{iuserdb, rdb, ctx}
+func NewUserHandler(iuserdb database.IUserDB, ctx *context.Context, rdb *redis.Client, s3Client *minio.Client) IUserHandler {
+	return &UserHandler{iuserdb, rdb, ctx, s3Client}
 }
 
 func (uh *UserHandler) CreateUser(c *fiber.Ctx) error {
@@ -97,6 +101,7 @@ func (uh *UserHandler) CreateOrder(msg *kafka.Messaging) func(c *fiber.Ctx) erro
 		order := new(models.Order)
 
 		err := c.BodyParser(order)
+
 		if err != nil {
 			return err
 		}
@@ -112,7 +117,7 @@ func (uh *UserHandler) CreateOrder(msg *kafka.Messaging) func(c *fiber.Ctx) erro
 		}
 		order.Status = "pending"
 		order.PlacedAt = time.Now().Unix()
-		nav, naver := uh.rdb.Get(uh.ctx, order.SchemeCode).Float64()
+		nav, naver := uh.rdb.Get(*uh.ctx, order.SchemeCode).Float64()
 		if naver != nil {
 			return naver
 		}
@@ -197,4 +202,57 @@ func (uh *UserHandler) GetOrdersByUser(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(orders)
+}
+func (uh *UserHandler) UploadImage(c *fiber.Ctx) error {
+	idParam := c.Params("id")
+	userID, err := strconv.Atoi(idParam)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid user id")
+	}
+	user, err := uh.GetBy(uint(userID))
+	if err != nil {
+		return err
+	}
+	file, err := c.FormFile("document")
+	if err != nil {
+		return err
+	}
+
+	f, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	err = c.SaveFile(file, fmt.Sprintf("./uploads/%s", file.Filename))
+     if err!=nil{
+		return err
+	 }
+	_, err = uh.s3Client.PutObject(context.Background(), models.Bucket, file.Filename, f, file.Size, minio.PutObjectOptions{ContentType: "simple/text"})
+	if err != nil {
+		return err
+	}
+	//     objectURL := fmt.Sprintf("http://%s/%s/%s", models.Endpoint, models.Bucket, file.Filename)
+
+	// user.Image =objectURL
+	url, err := uh.s3Client.PresignedGetObject(
+    context.Background(),
+    "uploads",
+    "Screenshot 2025-06-06 173236.png",
+    time.Minute*10, // Expires in 10 minutes
+    nil,
+)
+if err != nil {
+return  err
+}
+fmt.Println("Presigned URL:", url.String())
+	println("image" ,url.String())
+	user.Image=url.String()
+usr, err := uh.UpdateUser(user)
+	if err != nil {
+		return err
+	}
+
+	return c.JSON(usr)
+
 }

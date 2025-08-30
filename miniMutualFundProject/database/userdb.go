@@ -16,7 +16,9 @@ type IUserDB interface {
 	Create(user *models.UserTable) (*models.UserTable, error)
 	GetOrder(id string) (*models.SchemeTable, error)
 	CreateOrder(order *models.Order) (*models.Order, error)
-	 GetOrdersByUser(userID uint) ([]models.Order, error) 
+	GetOrdersByUser(userID uint) ([]models.Order, error)
+	GetBy(id uint) (*models.UserTable, error)
+	UpdateUser(user *models.UserTable) (*models.UserTable, error)
 }
 type UserDb struct {
 	DB *gorm.DB
@@ -79,6 +81,13 @@ func (udb *UserDb) GetBy(id uint) (*models.UserTable, error) {
 	}
 	return user, nil
 }
+func (udb *UserDb) UpdateUser(user *models.UserTable) (*models.UserTable, error) {
+tx:=	udb.DB.Model(&models.UserTable{}).Where("id =?", user.Id).Updates(user)
+		if tx.Error != nil {
+		return nil, tx.Error
+	}
+	return user, nil
+}
 func (udb *UserDb) GetOrderBy(id uint) (*models.Order, error) {
 	order := new(models.Order)
 	tx := udb.DB.First(order, id)
@@ -116,7 +125,7 @@ func (udb *UserDb) GetOrder(id string) (*models.SchemeTable, error) {
 	return scheme, nil
 }
 func (udb *UserDb) GetOrdersByUser(userID uint) ([]models.Order, error) {
-    var orders []models.Order
-    result := udb.DB.Where("user_id = ?", userID).Find(&orders)
-    return orders, result.Error
+	var orders []models.Order
+	result := udb.DB.Where("user_id = ?", userID).Find(&orders)
+	return orders, result.Error
 }

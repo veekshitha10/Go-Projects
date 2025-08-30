@@ -16,6 +16,8 @@ import (
 
 	"github.com/ansrivas/fiberprometheus/v2"
 	"github.com/gofiber/fiber/v2"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -147,15 +149,27 @@ func main() {
 	}
 	log.Info().Str("service", service).Msg("database connection is established")
 	Init(db)
-	userHandler := handlers.NewUserHandler(database.NewUserDB(db), ctx, rdb)
+	s3Client, err := minio.New(models.Endpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(models.AccessKey, models.SecretKey, ""),
+		Secure: false,
+		Region: models.Region, // optional but nice to set
+	})
+
+	userHandler := handlers.NewUserHandler(database.NewUserDB(db), &ctx, rdb, s3Client)
 	go updateRedisValue(rdb, ctx)
 	startJob(db)
 	msgUsersCreated := kafka.NewMessaging("omnenext.users.created", strings.Split(SEEDS, ","), "--cg=demo-consumer-group")
 	go msgUsersCreated.ProduceRecords()
 	go msgUsersCreated.ConsumeRecords()
 
-	app := fiber.New()
+	if err != nil {
+		log.Fatal().
+			Err(err)
+	}
 
+	app := fiber.New(
+		fiber.Config{
+			BodyLimit: 50 * 1024 * 1024})
 	prom := fiberprometheus.New(service)
 	prom.RegisterAt(app, "/metrics") // exposes Prometheus metrics here
 	app.Use(prom.Middleware)
@@ -166,6 +180,7 @@ func main() {
 	user_group := app.Group("/api/v1/users")
 
 	user_group.Post("/login", userHandler.CreateUser)
+	user_group.Post("/UploadImg/:id", userHandler.UploadImage)
 
 	user_group.Get("/:id", userHandler.GetOrdersByUser)
 
